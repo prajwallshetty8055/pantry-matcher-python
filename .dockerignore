@@ -1,0 +1,10 @@
+.git
+.circleci
+__pycache__
+*.pyc
+.venv
+.pytest_cache
+.ruff_cache
+.coverage
+tests
+.env

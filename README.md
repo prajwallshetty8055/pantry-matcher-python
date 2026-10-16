@@ -107,3 +107,35 @@ Write your answer in your README. It is worth more marks than the feature.
 | `relation "..." does not exist` | Migrations did not run, or the app started before they finished. |
 | Build takes minutes each time | `COPY . .` is above your dependency install. |
 | CI cannot reach the database | In CircleCI service containers the host **is** `localhost` — opposite of compose. |
+## Units
+
+Recipes and pantries use different units (2 cups vs 250 g), so everything is
+converted to one base unit before comparing: grams for solids, millilitres
+for liquids (`to_base` in `app/matching.py`). Conversion tables are in
+`TO_GRAMS` and `TO_ML`.
+
+**The cup trap:** a cup is not one number. A cup of flour is ~120 g, but a cup
+of liquid is 240 ml, so `to_base(..., liquid=True)` selects the liquid table.
+Unit tests cover this explicitly.
+
+Other decisions:
+- Unknown units, negative or non-numeric quantities raise `UnitError`
+  instead of silently becoming 0.
+- Ingredient names are normalised (trimmed, lowercased, plural "s" removed)
+  so "Oats" and "oat" match.
+- Substitutes (butter/oil/ghee, milk/curd/yoghurt) are pooled: 50 g butter
+  plus 60 g oil satisfies a 100 g butter requirement.
+- The shortfall is rounded to 2 decimals.
+
+**Known limitations:** cup = 120 g is a flour approximation (sugar is ~200 g,
+so per-ingredient densities would be the next step), "piece" is a flat 50 g,
+and `normalise` strips every trailing "s", so "molasses" becomes "molasse".
+
+## CI
+
+CircleCI runs on `main`: gitleaks secret scan, ruff lint, unit tests,
+integration tests (real Postgres and Redis service containers, host
+`localhost`), then builds and pushes `:qa`. `staging` and `prod` only build and
+push `:stage` and `:prod`. Every build also pushes an immutable
+`<branch>-<short-sha>` tag. In Docker Compose the database host is the
+service name `db`; in CircleCI service containers it is `localhost`.
