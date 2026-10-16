@@ -1,0 +1,130 @@
+version: 2.1
+
+executors:
+  py:
+    docker:
+      - image: cimg/python:3.12.7
+
+jobs:
+  secret-scan:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - run:
+          name: Install gitleaks
+          command: |
+            curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz gitleaks
+            sudo mv gitleaks /usr/local/bin/
+      - run: gitleaks detect --source . --verbose
+
+  lint:
+    executor: py
+    steps:
+      - checkout
+      - run: pip install ruff
+      - run: ruff check .
+
+  unit-tests:
+    executor: py
+    steps:
+      - checkout
+      - run: pip install -r requirements-dev.txt
+      - run: pytest tests/unit
+
+  integration-tests:
+    docker:
+      - image: cimg/python:3.12.7
+        environment:
+          DATABASE_URL: postgresql://pantry:pantry@localhost:5432/pantry
+          REDIS_URL: redis://localhost:6379/0
+          PGHOST: localhost
+          PGUSER: pantry
+          PGPASSWORD: pantry
+          PGDATABASE: pantry
+      - image: cimg/postgres:16.4
+        environment:
+          POSTGRES_USER: pantry
+          POSTGRES_PASSWORD: pantry
+          POSTGRES_DB: pantry
+      - image: cimg/redis:7.2
+    steps:
+      - checkout
+      - run:
+          name: Install psql client
+          command: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: pip install -r requirements-dev.txt
+      - run:
+          name: Wait for Postgres
+          command: |
+            for i in $(seq 1 30); do pg_isready -h localhost -U pantry && exit 0; sleep 2; done
+            exit 1
+      - run:
+          name: Apply migrations
+          command: |
+            for f in $(ls migrations/*.sql | sort); do
+              echo "Applying $f"; psql -v ON_ERROR_STOP=1 -f "$f"
+            done
+      - run: pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+
+  build-push:
+    parameters:
+      tag:
+        type: string
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Build image with moving and immutable tags
+          command: |
+            IMAGE=$DOCKERHUB_USER/pantry-matcher
+            docker build -t $IMAGE:<< parameters.tag >> -t $IMAGE:${CIRCLE_BRANCH}-${CIRCLE_SHA1:0:7} .
+      - run:
+          name: Push both tags
+          command: |
+            IMAGE=$DOCKERHUB_USER/pantry-matcher
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+            docker push $IMAGE:<< parameters.tag >>
+            docker push $IMAGE:${CIRCLE_BRANCH}-${CIRCLE_SHA1:0:7}
+
+workflows:
+  qa-pipeline:
+    jobs:
+      - secret-scan:
+          filters: &main-only
+            branches:
+              only: main
+      - lint:
+          requires: [secret-scan]
+          filters: *main-only
+      - unit-tests:
+          requires: [lint]
+          filters: *main-only
+      - integration-tests:
+          requires: [unit-tests]
+          filters: *main-only
+      - build-push:
+          name: build-push-qa
+          tag: qa
+          requires: [integration-tests]
+          filters: *main-only
+
+  stage-pipeline:
+    jobs:
+      - build-push:
+          name: build-push-stage
+          tag: stage
+          filters:
+            branches:
+              only: staging
+
+  prod-pipeline:
+    jobs:
+      - build-push:
+          name: build-push-prod
+          tag: prod
+          filters:
+            branches:
+              only: prod

@@ -69,6 +69,20 @@ def set_pantry(user: str, payload: dict = Body(...)):
             stored[name] = qty
     cache.drop(f"cook:{user}")
     return {"user": user, "items": stored}
+@app.delete("/pantry/{user}/{item}")
+def delete_pantry_item(user: str, item: str):
+    name = normalise(item)
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM pantry WHERE user_name=%s AND ingredient_id ="
+            " (SELECT id FROM ingredients WHERE name=%s)",
+            (user, name),
+        )
+        deleted = cur.rowcount
+    if not deleted:
+        raise HTTPException(404, f"{item!r} not in {user}'s pantry")
+    cache.drop(f"cook:{user}")
+    return {"user": user, "deleted": name}
 
 
 @app.get("/pantry/{user}/cookable")
