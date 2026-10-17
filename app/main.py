@@ -9,7 +9,7 @@ app = FastAPI(title="pantry-matcher")
 
 @app.get("/health")
 def health():
-    out = {"status": "ok", "postgres": False, "redis": False}
+    out = {"status": "ok", "version":"1.2", "postgres": False, "redis": False}
     try:
         db.query("SELECT 1")
         out["postgres"] = True
